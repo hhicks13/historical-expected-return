@@ -165,7 +165,8 @@ def instantaneous_return(syms,p,t):
     TVR = np.matmul(S.transpose(),R).trace()
     TVRp = np.matmul(S.transpose(),Rprime).trace()
     X = sum([int(l[0] == l[1] == 0) for l in L])/len(L[:,0])
-    return TVRp/TVR,X
+    net_gain = sum(btc2usd_S(p,t))
+    return TVRp/TVR,X,net_gain,
 
 # outer loop
 directory = "../options_csv/"
@@ -206,21 +207,19 @@ for i in range(1):
         syms = option_sample.index.values
         p = option_sample.ask_price.values
         # remove rows with future expiration (missing data)
-        print("before")
-        print(syms.shape)
-        print(p.shape)
+        before = syms.shape[0]
         T = _T(syms)
         mask = np.array([t < datetime.now() for t in T],dtype=bool)
         p = p[mask,...]
         syms= syms[mask,...]
-        print("after")
-        print(syms.shape)
-        print(p.shape)
+        after = syms.shape[0]
+        discard_rate = after/before
         # if empty skip, else compute return
         if syms.shape[0] == 0:
             continue
         else:
-            ir,xr = instantaneous_return(syms,p,ts_start)
-            print(ts_start,ir,xr)
+            ir,xr,ng = instantaneous_return(syms,p,ts_start)
+            # time, instant-return, exercise-rate,net-gain,discard-rate
+            print(ts_start,ir,xr,ng,discard_rate)
             #
             # if it passes test, then save as pickle object
