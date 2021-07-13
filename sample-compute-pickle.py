@@ -48,9 +48,9 @@ def _exercised(sym):
     K = int(tokens[2])
     Y = int(tokens[3] == 'C')
     if Y == 1:
-        return max(spot_price(asset,T)-K,0) > 0
+        return int(max(spot_price(asset,T)-K,0) > 0)
     elif Y == 0:
-        return max(K-spot_price(asset,T),0) > 0
+        return int(max(K-spot_price(asset,T),0) > 0)
     else:
         raise ValueError("Y invalid, must be 1 or 0")
 
@@ -143,4 +143,4 @@ for i,t in enumerate(_tg[:80]):
     R = instantaneous_return(syms,p,t)
     print(R)
     #
-    # pass to methods, compute instantaneous_return
+    # if it passes test, then save as pickle object
