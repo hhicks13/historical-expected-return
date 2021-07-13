@@ -1,8 +1,11 @@
+import logging
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from datetime import datetime
 import yfinance as yf
 import sys
+
 
 #
 # calibrate timing
@@ -16,8 +19,8 @@ _end = datetime.now()
 #
 # get btc and eth median spot prices
 #
-data_eth = yf.download(tickers='ETH-USD',start=pd.Timestamp(_begin),end=pd.Timestamp(_end),interval='1h')
-data_btc = yf.download(tickers='BTC-USD',start=pd.Timestamp(_begin),end=pd.Timestamp(_end),interval='1h')
+data_eth = yf.download(tickers='ETH-USD',start=pd.Timestamp(_begin),end=pd.Timestamp(_end),interval='1h',progress=False)
+data_btc = yf.download(tickers='BTC-USD',start=pd.Timestamp(_begin),end=pd.Timestamp(_end),interval='1h',progress=False)
 _btc = pd.Series(data=data_btc["Close"])
 _btc_hi = pd.Series(data=data_btc["High"])
 _btc_low = pd.Series(data=data_btc["Low"])
@@ -157,31 +160,36 @@ def _Rprime(p,syms,t):
     Rprime = Rmin + L + G
     return Rprime
 
-def instantaneous_return(syms,p,t):
+def growth_ratio(syms,p,t):
     R,L = _rmin_loss(syms)
     Rprime = _Rprime(p,syms,t)
     # need to return matrix of spot prices
     S = _Smatrix(syms,t)
     TVR = np.matmul(S.transpose(),R).trace()
     TVRp = np.matmul(S.transpose(),Rprime).trace()
-    X = sum([int(l[0] == l[1] == 0) for l in L])/len(L[:,0])
-    net_gain = sum(btc2usd_S(p,t))
-    return TVRp/TVR,X,net_gain,
+    return TVRp/TVR
 
 # outer loop
 directory = "../options_csv/"
 _timegrid = np.array([key for key in btc_spot_prices.keys()],dtype=object)
 # outer loop over days ##########
-for i in range(1):
+data_begin = _begin
+data_end = '2021-05-29'
+trading_days = pd.date_range(start=pd.Timestamp(data_begin),end=pd.Timestamp(data_end),freq='D')
+for _day in trading_days:
     #
     # need to reset data if beginning of new day
     # 
     #
-    #nrows = 8437280
+    day = str(_day.year) + '-' + str(_day.month).zfill(2) + '-' + str(_day.day).zfill(2)
     nrows = 8437280
-    day = '2021-03-11'
+    
     filename = "deribit_quotes_"+day+"_OPTIONS.csv"
-    data = pd.read_csv(directory+ filename,nrows=nrows)
+    path = directory + filename
+    datafile = Path(path)
+    if not datafile.is_file():continue
+    
+    data = pd.read_csv(path,nrows=nrows)
     data = data.dropna()
     data["datetime"] = pd.to_datetime(data['local_timestamp']*1e3)
     data = data.set_index("datetime")
@@ -192,7 +200,6 @@ for i in range(1):
     # inner loop #####################################
     for j,_ts in enumerate(_timegrid[_timegrid_mask,...]):
         if _ts.hour == 18:
-            print("finished sampling day")
             break
         #
         ts_start = _ts
@@ -206,20 +213,34 @@ for i in range(1):
         option_sample = deribit_sample.groupby(['symbol']).median()
         syms = option_sample.index.values
         p = option_sample.ask_price.values
-        # remove rows with future expiration (missing data)
-        before = syms.shape[0]
+        # only invest in short term options (1-month out)
         T = _T(syms)
-        mask = np.array([t < datetime.now() for t in T],dtype=bool)
-        p = p[mask,...]
-        syms= syms[mask,...]
-        after = syms.shape[0]
-        discard_rate = after/before
+        month_mask = np.array([t.month <= day.month+1 for t in T],dtype=bool)
+        p_month = p[month_mask,...]
+        syms_month= syms[month_mask,...]
+        market_share_month = syms_month.shape[0]/syms.shape[0]
+        # invest in as many as data will allow
+        #max_mask = np.array([t <= datetime.now() for t in T],dtype=bool)
+        #p_max = p[max_mask,...]
+        #syms_max = syms[max_mask,...]
+        #market_share_max = syms_max.shape[0]/syms.shape[0]
+        T_month = _T(syms_month)
+        max_T_month = max(T_month)
+        
+
+        
         # if empty skip, else compute return
+        
+
+
+        
         if syms.shape[0] == 0:
             continue
         else:
-            ir,xr,ng = instantaneous_return(syms,p,ts_start)
+            ratio = instantaneous_return(syms_month,p_month,ts_start)
+            monthly_return = 1-ratio
+            apr_month = ((monthly_return/30)*365)*100
             # time, instant-return, exercise-rate,net-gain,discard-rate
-            print(ts_start,ir,xr,ng,discard_rate)
+            print(ts_start,",",apr_month,",",ave_T_month,",",min_T_month,",",max_T_month,",",market_share_month)
             #
             # if it passes test, then save as pickle object
