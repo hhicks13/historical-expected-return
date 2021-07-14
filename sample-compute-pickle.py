@@ -30,8 +30,8 @@ _eth_hi = pd.Series(data=data_eth["High"])
 _eth_low = pd.Series(data=data_eth["Low"])
 
 #
-_btc_resampled = _btc.resample('6H').mean()
-_eth_resampled = _eth.resample('6H').mean()
+_btc_resampled = _btc.resample('2H').mean()
+_eth_resampled = _eth.resample('2H').mean()
 
 _btc_hi = _btc_hi.resample('1D').max()
 _eth_hi = _eth_hi.resample('1D').max()
@@ -160,46 +160,54 @@ def _Rprime(p,syms,t):
     Rprime = Rmin + L + G
     return Rprime
 
-def growth_ratio(syms,p,t):
+def _ratio(syms,p,t):
+
     R,L = _rmin_loss(syms)
     Rprime = _Rprime(p,syms,t)
     # need to return matrix of spot prices
     S = _Smatrix(syms,t)
-    TVR = np.matmul(S.transpose(),R).trace()
-    TVRp = np.matmul(S.transpose(),Rprime).trace()
-    return TVRp/TVR
+    #
+    loss = np.multiply(S,L)
+    net_income = np.sum(usd_gain(p,t)[:,1])
+    call_exercised = sum(np.array([l<0 for l in loss[:,0]],dtype=bool))
+    put_exercised = sum(np.array([l<0 for l in loss[:,1]],dtype=bool))
+    portfolio_size = len(loss)
+    #
+    Rusd = np.multiply(S,R)
+    Rprimeusd = np.multiply(S,Rprime)
+    TVR = np.sum(Rusd[:,0]) + np.sum(Rusd[:,1])
+    TVRp = np.sum(Rprimeusd[:,0]) + np.sum(Rprimeusd[:,1])
+    return TVRp/TVR,TVR,net_income,call_exercised,put_exercised,portfolio_size
 
-# outer loop
+
 directory = "../options_csv/"
 _timegrid = np.array([key for key in btc_spot_prices.keys()],dtype=object)
 # outer loop over days ##########
 data_begin = _begin
-data_end = '2021-05-29'
-trading_days = pd.date_range(start=pd.Timestamp(data_begin),end=pd.Timestamp(data_end),freq='D')
-for _day in trading_days:
+data_end = '2021-06-15'
+_trading_days = pd.date_range(start=pd.Timestamp(data_begin),end=pd.Timestamp(data_end),freq='D')
+print("time,apr_monthly,ratio,initial,net_income,call_exer,put_exer,portfolio_size")
+for _day in _trading_days:
     #
     # need to reset data if beginning of new day
     # 
     #
     day = str(_day.year) + '-' + str(_day.month).zfill(2) + '-' + str(_day.day).zfill(2)
-    nrows = 8437280
-    
     filename = "deribit_quotes_"+day+"_OPTIONS.csv"
     path = directory + filename
     datafile = Path(path)
     if not datafile.is_file():continue
-    
-    data = pd.read_csv(path,nrows=nrows)
+    data = pd.read_csv(path)
     data = data.dropna()
     data["datetime"] = pd.to_datetime(data['local_timestamp']*1e3)
     data = data.set_index("datetime")
     ts_day0 = pd.Timestamp(day)
     ts_day0 = ts_day0.replace(hour=0,minute=0,second=0)
-    ts_day1 = ts_day0.replace(day=ts_day0.day+1)
+    ts_day1 = ts_day0  + pd.to_timedelta('1 day')
     _timegrid_mask = np.array([t >= ts_day0 and t < ts_day1 for t in _timegrid],dtype=bool)
     # inner loop #####################################
     for j,_ts in enumerate(_timegrid[_timegrid_mask,...]):
-        if _ts.hour == 18:
+        if _ts.hour == 22:
             break
         #
         ts_start = _ts
@@ -213,34 +221,22 @@ for _day in trading_days:
         option_sample = deribit_sample.groupby(['symbol']).median()
         syms = option_sample.index.values
         p = option_sample.ask_price.values
-        # only invest in short term options (1-month out)
         T = _T(syms)
-        month_mask = np.array([t.month <= day.month+1 for t in T],dtype=bool)
+        # collect all options that mature within next month
+        month_mask = np.array([maturity <= datetime.now() for maturity in T],dtype=bool)
         p_month = p[month_mask,...]
         syms_month= syms[month_mask,...]
-        market_share_month = syms_month.shape[0]/syms.shape[0]
-        # invest in as many as data will allow
-        #max_mask = np.array([t <= datetime.now() for t in T],dtype=bool)
-        #p_max = p[max_mask,...]
-        #syms_max = syms[max_mask,...]
-        #market_share_max = syms_max.shape[0]/syms.shape[0]
-        T_month = _T(syms_month)
-        max_T_month = max(T_month)
-        
-
-        
         # if empty skip, else compute return
-        
-
-
-        
         if syms.shape[0] == 0:
             continue
         else:
-            ratio = instantaneous_return(syms_month,p_month,ts_start)
-            monthly_return = 1-ratio
-            apr_month = ((monthly_return/30)*365)*100
-            # time, instant-return, exercise-rate,net-gain,discard-rate
-            print(ts_start,",",apr_month,",",ave_T_month,",",min_T_month,",",max_T_month,",",market_share_month)
+            ratio,initial,net_income,call_exer,put_exer,portfolio_size = _ratio(syms_month,p_month,ts_start)
+            monthly_rate_return = ratio-1
+            apr_month = ((monthly_rate_return)*12)*100
+            outlist = [ts_start,apr_month,ratio,initial,net_income,call_exer,put_exer,portfolio_size]
+            outlist = [str(item) for item in outlist]
+            out_str = ','.join(outlist)
+            print(out_str)
+            
             #
             # if it passes test, then save as pickle object
